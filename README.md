@@ -1,37 +1,64 @@
 # 基于哈夫曼树的文件压缩与解压器
 
-#### 介绍
+## 介绍
 使用C++语言，基于哈夫曼树原理设计的文件压缩与解压器
 
-#### 软件架构
-软件架构说明
+## 设计分析
 
+设计主要分为两大部分：文件压缩与文件解压缩
 
-#### 安装教程
+### 文件压缩
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+- 以二进制+只读模式打开文件，这里我使用的是CreateFile函数，读取文件使用ReadFile，函数写入文件使用WriteFile函数。
 
-#### 使用说明
+  ![](https://keyon-photo-1256901694.cos.ap-beijing.myqcloud.com//markdown20191208164248.png)
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+- 以字节为单位读取文件，这里我每次读取256字节，放入缓冲区readBuf中，再以readBuf[i]访问权重数组，将其加一。dwReadNum表示读取到的字节数，如果为0，则读取到文件末尾。
 
-#### 参与贡献
+  ![](https://keyon-photo-1256901694.cos.ap-beijing.myqcloud.com//markdown20191208164802.png)
 
-1.  Fork 本仓库
-2.  新建 Feat_xxx 分支
-3.  提交代码
-4.  新建 Pull Request
+- 这里有个问题，程序后期写入配置头的时候，是写入权重数组的。以‘00001111’为例，配置头中先写入‘00001111’1Byte，再写入1Byte的权重。如果文件过大，统计的字节权重过大，1Byte就写不下去而只截取前8位。所以统计完各字节的权重后，重新给每个字节的权重赋值，取相对权重，即比较各字节的权重，取其相对权重，使权重限制在0~255内。
 
+- 根据字节权重数组，构造最小堆，这里采用C++STL库中的最小优先队列，方便构造Huffman树时取最小权重的结点。
+  因为是用的STL，这里TreeNode结点需要对运算符重载，重载运算符的函数注意在末尾需要加上const，否则会报错。
 
-#### 码云特技
+  ![](https://keyon-photo-1256901694.cos.ap-beijing.myqcloud.com//markdown20191208164834.png)
 
-1.  使用 Readme\_XXX.md 来支持不同的语言，例如 Readme\_en.md, Readme\_zh.md
-2.  码云官方博客 [blog.gitee.com](https://blog.gitee.com)
-3.  你可以 [https://gitee.com/explore](https://gitee.com/explore) 这个地址来了解码云上的优秀开源项目
-4.  [GVP](https://gitee.com/gvp) 全称是码云最有价值开源项目，是码云综合评定出的优秀开源项目
-5.  码云官方提供的使用手册 [https://gitee.com/help](https://gitee.com/help)
-6.  码云封面人物是一档用来展示码云会员风采的栏目 [https://gitee.com/gitee-stars/](https://gitee.com/gitee-stars/)
+  ![](https://keyon-photo-1256901694.cos.ap-beijing.myqcloud.com//markdown20191208164846.png)
+
+- 构造Huffman树的过程：每次从最小优先队列中取出两个堆顶元素（即最小元素），将其和值存储在一个新的结点中，并将该新结点作为之前两个最小结点的父节点。然后将该新结点放入最小优先队列中。
+
+- 循环上述过程，直到最小优先队列中的元素只剩一个，此时该元素即为Huffman树的根结点。
+
+- 根据构造的Huffman树生成对应字节的Huffman编码：先定义一个string类型的数组，大小为256字节。以下标为对应字节，保存相应的Huffman编码。
+
+- ![](https://keyon-photo-1256901694.cos.ap-beijing.myqcloud.com//markdown20191208164942.png)
+
+- 深度遍历Huffman树，向左遍历取‘0’，向右遍历取‘1’，存放到一个字符数组codeBuf[]中。当遍历到叶子结点，以其对应字符的十进制val作为下标访问HuffmanCodeTable数组，将codeBuf[]赋给HuffmanCodeTable[val]。
+
+- 打开一个新文件，作为压缩后的文件。先写入配置信息头，以便解压时能根据配置信息头，重新构造Huffman树。
+  这里配置信息头分为三部分：
+
+  1. 有效字节的种类数N（有效字节即该字节出现过）占1Byte
+  2. 有效压缩信息位的位数（即存储的压缩后的Huffman编码总长）占5Byte
+  3. 有效字节+该字节的相对权重（根据这个重新构造Huffman树）占N Byte，N<256*2
+
+- 先读取1Byte，即第一部分，再读取5Byte，即第二部分，然后根据第一部分，读取N Byte，即第三部分。
+  第二部分占5Byte，总共2的40次方的位数，即大小不超过1TB。
+
+- 重新读取需要压缩的文件，以1Byte为单位，在写完配置信息头的基础上，根据建立好的Huffman编码表，将其对应的Huffman编码写入新文件，因为Huffman编码是不定长的，如果总位数不是8的倍数，需要不足补零，或者每次写入后清理缓冲区。
+
+- 关闭所有文件，压缩完毕。
+
+### 文件解压缩
+
+- 文件解压缩的第一步是先读取压缩文件的配置信息头，按照写入配置信息头的顺序，依次将三部分读出。
+- 根据配置信息头中的第三部分，重新构造Huffman树。
+- 压缩文件从配置信息头之后，到文件末尾，都是压缩信息（最后一个字节可能补零N位，可通过配置信息头的第二部分，即有效信息位数来控制，识别是补零还是有效位）。
+- 创建一个解压文件，继续读取压缩文件，每次读取到一个编码缓冲区codeBuf时，将codeBuf按位匹配Huffman树，即根据已知01串，遍历Huffman树。如果遍历到叶子结点，将对应字节写入到解码缓冲区decodeBuf中，如果decodeBuf已满，则写入解压文件，并清空解码缓冲区，准备放置下一轮的解码。
+- 如何判断解码是否结束：
+  - 这里定义一个BufPageNum表示解码缓冲区的页数，cPos表示编码缓冲区当前位置索引。
+  - 如果BufPageNum*8+cPos == 有效信息总位数，则表示解码完毕。
+- 这里有一种情况：当用编码缓冲区codeBuf匹配Huffman树时，极有可能没有遍历到叶子结点，codeBuf就已经遍历到头了。
+  此时需要更新编码缓冲区codeBuf，并继续上一次的情况遍历Huffman树。
+
